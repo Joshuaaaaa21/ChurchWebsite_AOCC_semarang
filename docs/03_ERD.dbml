@@ -1,0 +1,186 @@
+// ============================================================================
+// Entity Relationship Diagram (DBML)
+// Proyek  : Website Resmi & Dashboard Admin AOCC Semarang
+// Versi   : 2.0 (Low-Resource VPS 1 GB RAM — SQLite Awal, Siap Migrasi MySQL/MariaDB)
+// Catatan : Tepat 7 tabel domain utama. Tanpa tabel roles/permissions/media/sessions/jobs.
+//           Session & Cache menggunakan file driver; Queue menggunakan sync.
+// ============================================================================
+
+Project aocc_semarang {
+  database_type: 'SQLite'
+  Note: 'Database terpusat 7 tabel untuk AOCC Semarang. Kompatibel SQLite dan MySQL/MariaDB.'
+}
+
+// ----------------------------------------------------------------------------
+// 1. Akun Admin (3 akun dengan hak akses setara, tanpa registrasi publik)
+// ----------------------------------------------------------------------------
+Table users {
+  id bigint [pk, increment]
+  name varchar(120) [not null, note: 'Nama tampilan admin']
+  username varchar(50) [not null, unique, note: 'Username unik untuk login admin']
+  email varchar(150) [null, unique, note: 'Email opsional untuk referensi internal']
+  password varchar(255) [not null, note: 'Password ter-hash (Bcrypt)']
+  is_active boolean [not null, default: true, note: 'Status aktif akun admin']
+  last_login_at datetime [null, note: 'Waktu login terakhir']
+  remember_token varchar(100) [null]
+  created_at datetime [null]
+  updated_at datetime [null]
+
+  Note: 'Menyimpan 3 akun admin dengan hak akses setara. Tidak ada tabel roles/permissions.'
+}
+
+// ----------------------------------------------------------------------------
+// 2. Kategori Ibadah (6 kategori terkelola & terurut, bukan hardcode)
+//    Kids, Teens, Youth, Ibadah Raya, Kaum Pria, Kaum Wanita
+// ----------------------------------------------------------------------------
+Table worship_categories {
+  id bigint [pk, increment]
+  name varchar(100) [not null, note: 'Nama kategori ibadah']
+  slug varchar(120) [not null, unique, note: 'Slug unik untuk referensi modal/API']
+  short_description varchar(255) [null, note: 'Deskripsi singkat di kartu sebelum modal dibuka']
+  display_order integer [not null, default: 0, note: 'Urutan tampilan kategori (ASC)']
+  is_published boolean [not null, default: true, note: 'Status tampil/sembunyi']
+  created_at datetime [null]
+  updated_at datetime [null]
+
+  indexes {
+    (is_published, display_order) [name: 'idx_worship_categories_pub_order']
+  }
+
+  Note: 'Master 6 kategori ibadah AOCC Semarang yang dapat diurutkan dan dikelola admin.'
+}
+
+// ----------------------------------------------------------------------------
+// 3. Konten Detail Ibadah (Isi Modal/Window per Kategori)
+// ----------------------------------------------------------------------------
+Table worship_contents {
+  id bigint [pk, increment]
+  worship_category_id bigint [not null, ref: > worship_categories.id]
+  title varchar(160) [not null, note: 'Judul konten di dalam modal']
+  summary varchar(300) [null, note: 'Ringkasan singkat opsional']
+  description text [not null, note: 'Teks panjang detail ibadah (TEXT/LONGTEXT cross-DB)']
+  schedule_text varchar(255) [null, note: 'Jadwal ibadah (misal: Setiap Minggu, 09:00 WIB)']
+  location varchar(255) [null, note: 'Lokasi/ruangan ibadah']
+  image_path varchar(255) [null, note: 'Path gambar relatif di storage (BUKAN BLOB)']
+  image_alt varchar(160) [null, note: 'Alt text gambar untuk aksesibilitas']
+  external_url varchar(2048) [null, note: 'Tautan eksternal (http/https)']
+  external_link_label varchar(100) [null, note: 'Label tombol tautan eksternal']
+  display_order integer [not null, default: 0, note: 'Urutan konten dalam kategori']
+  is_published boolean [not null, default: true, note: 'Status publikasi']
+  updated_by bigint [null, ref: > users.id]
+  created_at datetime [null]
+  updated_at datetime [null]
+
+  indexes {
+    (worship_category_id, is_published, display_order) [name: 'idx_worship_contents_cat_pub_order']
+  }
+
+  Note: 'Konten detail modal ibadah. FK worship_category_id ON DELETE CASCADE; updated_by ON DELETE SET NULL.'
+}
+
+// ----------------------------------------------------------------------------
+// 4. Sermon (TANPA kategori, terbaru paling kiri berdasarkan published_at DESC)
+// ----------------------------------------------------------------------------
+Table sermons {
+  id bigint [pk, increment]
+  title varchar(200) [not null, note: 'Judul sermon']
+  slug varchar(220) [not null, unique, note: 'Slug unik sermon']
+  speaker_name varchar(120) [null, note: 'Nama pembicara (opsional)']
+  scripture_reference varchar(120) [null, note: 'Referensi ayat Alkitab (opsional)']
+  summary varchar(300) [null, note: 'Ringkasan singkat pada kartu geser']
+  description text [null, note: 'Catatan/deskripsi panjang sermon pada modal']
+  image_path varchar(255) [null, note: 'Path thumbnail/cover di storage (BUKAN BLOB)']
+  image_alt varchar(160) [null, note: 'Alt text gambar']
+  external_url varchar(2048) [null, note: 'Tautan eksternal (misal YouTube)']
+  external_link_label varchar(100) [null, note: 'Label tombol tautan']
+  published_at datetime [not null, note: 'Tanggal publikasi — kunci urutan terbaru paling kiri']
+  is_published boolean [not null, default: false, note: 'Status publikasi (draft/published)']
+  created_by bigint [null, ref: > users.id]
+  updated_by bigint [null, ref: > users.id]
+  created_at datetime [null]
+  updated_at datetime [null]
+
+  indexes {
+    (is_published, published_at) [name: 'idx_sermons_pub_published_at']
+  }
+
+  Note: 'Daftar sermon tanpa kategori. Urutan: published_at DESC, id DESC. Wajib paginated/dibatasi.'
+}
+
+// ----------------------------------------------------------------------------
+// 5. Acara / Events (Informasi acara + tautan eksternal, TANPA pendaftaran/RSVP)
+// ----------------------------------------------------------------------------
+Table events {
+  id bigint [pk, increment]
+  title varchar(200) [not null, note: 'Nama acara']
+  slug varchar(220) [not null, unique, note: 'Slug unik acara']
+  summary varchar(300) [null, note: 'Ringkasan singkat pada kartu acara']
+  description text [not null, note: 'Informasi lengkap acara (mendukung teks panjang)']
+  starts_at datetime [not null, note: 'Tanggal & waktu mulai acara (WIB)']
+  ends_at datetime [null, note: 'Tanggal & waktu selesai acara (opsional)']
+  location varchar(255) [null, note: 'Lokasi pelaksanaan acara']
+  image_path varchar(255) [null, note: 'Path poster/banner acara di storage (BUKAN BLOB)']
+  image_alt varchar(160) [null, note: 'Alt text gambar']
+  external_url varchar(2048) [null, note: 'Tautan eksternal acara']
+  external_link_label varchar(100) [null, note: 'Teks tombol tautan eksternal']
+  is_published boolean [not null, default: false, note: 'Status publikasi acara']
+  created_by bigint [null, ref: > users.id]
+  updated_by bigint [null, ref: > users.id]
+  created_at datetime [null]
+  updated_at datetime [null]
+
+  indexes {
+    (is_published, starts_at) [name: 'idx_events_pub_starts_at']
+  }
+
+  Note: 'Informasi acara gereja dengan tautan eksternal. Tidak ada pendaftaran, tiket, atau RSVP.'
+}
+
+// ----------------------------------------------------------------------------
+// 6. Pesan Pengunjung (Hubungi Kami -> DB dulu -> SMTP Gmail -> Dashboard Admin)
+// ----------------------------------------------------------------------------
+Table contact_messages {
+  id bigint [pk, increment]
+  sender_name varchar(120) [not null, note: 'Nama pengirim']
+  sender_email varchar(150) [not null, note: 'Email pengirim']
+  sender_phone varchar(30) [null, note: 'Nomor HP/WhatsApp (opsional)']
+  subject varchar(200) [not null, note: 'Subjek pesan']
+  message text [not null, note: 'Isi pesan panjang pengunjung']
+  status varchar(20) [not null, default: 'unread', note: 'unread | read | archived']
+  read_at datetime [null, note: 'Waktu pertama dibaca admin']
+  read_by bigint [null, ref: > users.id]
+  email_delivery_status varchar(20) [not null, default: 'pending', note: 'pending | sent | failed']
+  email_sent_at datetime [null, note: 'Waktu notifikasi Gmail berhasil dikirim']
+  email_error text [null, note: 'Ringkasan error SMTP jika gagal kirim']
+  ip_address varchar(45) [null, note: 'Alamat IP pengirim (anti-spam/audit)']
+  created_at datetime [null]
+  updated_at datetime [null]
+
+  indexes {
+    (status, created_at) [name: 'idx_contact_messages_status_created']
+    (email_delivery_status) [name: 'idx_contact_messages_email_status']
+  }
+
+  Note: 'Pesan dari form Hubungi Kami. Disimpan ke DB terlebih dahulu sebelum percobaan SMTP Gmail.'
+}
+
+// ----------------------------------------------------------------------------
+// 7. Konten Statis & Pengaturan Section Website (Beranda, Tentang, Hubungi Kami)
+// ----------------------------------------------------------------------------
+Table site_contents {
+  id bigint [pk, increment]
+  section varchar(50) [not null, note: 'general | hero | about | contact | social']
+  key varchar(100) [not null, unique, note: 'Kunci unik konten (misal: hero_title, about_body)']
+  label varchar(120) [not null, note: 'Label field di form dashboard admin']
+  content_type varchar(20) [not null, default: 'text', note: 'text | longtext | url | image | email']
+  value text [null, note: 'Isi konten (mendukung teks panjang, URL, path gambar)']
+  updated_by bigint [null, ref: > users.id]
+  created_at datetime [null]
+  updated_at datetime [null]
+
+  indexes {
+    (section, key) [name: 'idx_site_contents_section_key']
+  }
+
+  Note: 'Mengelola konten dinamis Beranda, Tentang, Hubungi Kami, dan tautan sosial gereja.'
+}
